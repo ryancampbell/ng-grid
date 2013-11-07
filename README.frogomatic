@@ -1,0 +1,211 @@
+This describes the local modifications made to ng-grid.  Note that I have not
+changed the src/ files, I made modifications directly to
+ng-grid-<version>.debug.js since this was quicker for me and I was facing a
+delivery deadline (sorry, I know this is bad practice).  Also, I don't really
+have time to put together examples but I'll include code snippets below.  I
+might push some examples later in my Copious Free Time [tm].
+
+My project uses a RESTful backend with Restangular, with the primary key of
+each object being "id".  I have used the modified ng-grid.js with a local store,
+and it works just fine.  Also, please note, I'm relatively new to frontend
+work and come largely from a backend (Perl+Catalyst) background, and modifying
+ng-grid was one of the first things I did on this project.  So this could no
+doubt be cleaned up considerably.
+
+I have not tested any of this AT ALL with grouping, and it probably won't work.
+
+
+Modifications:
+
+1. Row-level editing
+
+This allows you to edit an entire row at once.  "Save" and "Cancel" buttons
+appear below a row being edited, bound to user-specified functions (probably
+not very angular-ish but efficiency was a concern).  Also supports associating
+"create" and "update" scope functions which can then be called by buttons 
+outside of your grid scope.
+
+Example code snippet for a "widgets" grid;
+
+    // somewhere in your controller
+
+    scope.gridOptions = {
+        selectedItems: [],
+
+        // Turn on row-level editing
+        enableRowEdit: true,
+
+        // Called when the "Save" button is clicked
+        onRowSave: function(row) {
+            var entity = row.entity;
+            // If 'id' is set, we're updating
+            if (entity.id) {
+                clone.put();
+            }
+
+            // otherwise we're creating
+            else {
+                Restangular.all("widgets").post(entity);
+            }
+        },
+
+        // Called when the cancel button is clicked
+        // Reload the grid data to nuke the newly created and
+        // discarded row
+        onRowCancel: function(row) {
+            if (!row.id) {
+                scope.reload();             // defined elsewhere
+            }
+        },
+
+        // This might require a little explanation.  I use a toolbar above
+        // each grid with Create, Update, and Delete buttons.  The toolbar
+        // has its own scope, so, I needed a way to associate the grid's edit
+        // functionality with the toolbar buttons.  This is it.
+
+        bindRowEdit: function(editFunc) {
+            // Somewhere in your view:
+            // <div class="button" ng-click="actions.create()">Create</div>
+            // <div class="button" ng-click="actions.update(gridOptions.selectedItems)" ng-disabled="gridOptions.selectedItems.length != 1">Update</div>
+
+            // If you already have other actions in your scope you can of course
+            // scope.actions = angular.extend({}, scope.actions, {
+
+            scope.actions = {
+                update: function(entities) {
+                    if (entities.length == 1) {
+                        // FIXME - This is a disgusting kludge
+                        // The grid selection doesn't expose the ngRow object, just the entity itself, so 
+                        // we have to hunt through the grid data to find the ngRow corresponding to it
+
+                        for (var i=0; i<scope.gridOptions.ngGrid.filteredRows.length; i++) {
+                            var row = scope.gridOptions.ngGrid.filteredRows[i];
+                            
+                            if (row.entity === entities[0]) {
+                                if (row.clone)
+                                    row = row.clone;
+                                editFunc(row);
+                                break;
+                            }
+                        }
+                    }
+                },
+                create:  function() {
+                    var newEntity = {};
+                    scope.myData.push(newEntity);
+                    $timeout(function() {
+                        scope.actions.update(model, [newEntity]);
+                    }, 200);
+                }
+            });
+        }
+    };
+
+2. Expandable rows
+
+
+This places an "expand this row" icon next to each row, which, when clicked, 
+expands the row to include additional content.
+
+Example code:
+
+    scope.gridOptions = {
+        selectedItems: [],
+
+        // Turn on row expansion
+        enableRowExpansion: true,
+
+        onRowExpand: function(row) {
+            return {
+                // You can use template instead of templateUrl
+                templateUrl: "app/widget_details.html",
+
+                // scope: true will create a new child of the grid row's scope.
+                // scope.row is set to the expanded row.
+
+                // scope: false will use the grid row's scope itself.
+                // scope.row is still set to the expanded row
+
+                // you can also provide an explicit scope, or a promise of a scope
+                scope: true
+            }
+        },
+
+        // What to show when you're waiting for the template to load
+        rowExpandPendingContent: '<div><img src="images/spinner.gif" /> Loading...</div>',
+    }
+
+Then in app/widget_details.html (or its controller), do something with "row.entity".
+
+You can use both row expansion and row editing, but you'll need to override the default
+template used by ng-grid because I didn't get around to adding in a "editable and
+expandable" template.  For example, here's a snippet from an HTML file which sets a 
+template suitable for combined editing and expanding (note, I wrote directives to 
+configure the grid options; you'd put this in your controller's
+scope.gridOptions.expandableRowTemplate.  Also, the 'widget_status_code' business is
+so that rows with different statuses have different colors; you can ignore that).
+
+
+    <grid-template type="expandable-row-template">
+        <!-- div>
+            <div ng-class="'color-' + row.getProperty('widget_status_code')">
+                <div ng-show="row.isExpanded" class="ngCell ngCellExpander expanded" style="width: 20px">
+                    <a ng-click="collapseRow(row)"><i class="icon-collapse" style="float: left; padding-top: 3px" ></i></a>
+                </div>
+                <div ng-show="!row.isExpanded" class="ngCell ngellExpander collapsed" style="width: 20px">
+                    <a ng-click="expandRow(row)"><i class="icon-expand" style="float: left; padding-top: 3px" ></i></a>
+                </div>
+            </div>
+
+            <div ng-edit-cell-if="!row.isExpanded" ng-class="'color-' + row.getProperty('widget_status_code')">
+                <div ng-style="{ cursor: row.cursor }" ng-repeat="col in renderedColumns" ng-class="col.colIndex()" class="ngCell {{col.cellClass}}">
+                    <div class="ngVerticalBar" ng-style="{height: rowHeight}" ng-class="{ ngVerticalBarVisible: !$last }">&nbsp;</div>
+                    <div ng-cell></div>
+                </div>
+            </div>
+            <div ng-edit-cell-if="row.isExpanded" ng-class="'color-' + row.getProperty('widget_status_code')">
+                <div ng-style="{ height: rowHeight }">
+                    <div ng-style="{ cursor: row.cursor }" ng-repeat="col in renderedColumns" ng-class="col.colIndex()" class="ngCell {{col.cellClass}}">
+                        <div class="ngVerticalBar" ng-style="{height: rowHeight}" ng-class="{ ngVerticalBarVisible: !$last }">&nbsp;</div>
+                        <div ng-cell></div>
+                    </div>
+                </div>
+                <div style="margin-left: 25px; position: relative; background-color: #ccc">
+                    <div class="rowexpander"></div>
+                </div>
+            </div>
+        </div -->
+    </grid-template>
+
+
+3. General support for variable height rows
+You should be able to give different rows different heights by watching
+scope.gridOptions.ngGrid.filteredRows and doing something like
+
+angular.forEach(rows, function(row) {
+    row.rowHeight = calcHeight(row.entity);
+});
+
+I haven't tried.  You might need to invoke rowFactory.renderedChange() or
+similarly re-render the grid.
+
+4. Double-click action
+
+    scope.gridOptions = {
+        ...
+        onDoubleClick: function(row) { 
+            // Do something, for example invoke the update function from
+            // row editing:
+            scope.actions.update([row.entity]);
+        }
+
+4. Bug fix for the grid content disappearing in Chrome when you use grids
+in UI-Bootstrap tabs
+
+5. Removed edit cursor when hovering over field contents (I don't see any
+reason for it and the client didn't like it).  I just commented it out so
+you can uncomment it to restore it.
+
+The templates refer to CSS classes from Boostrap.
+
+
